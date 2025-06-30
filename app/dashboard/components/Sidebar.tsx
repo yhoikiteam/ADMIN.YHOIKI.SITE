@@ -34,6 +34,8 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, toggleSidebar, activeMenu, se
     { key: 'dashboard', label: 'Dashboard', icon: FaHome },
     { key: 'account', label: 'Akun', icon: FaUser },
     { key: 'members', label: 'Member', icon: FaUsers },
+    { key: 'formulir', label: 'Formulir', icon: FaUsers },
+    { key: 'aktivitas', label: 'Aktivity', icon: FaUsers },
     { key: 'community', label: 'Community', icon: FaComments },
     { key: 'blog', label: 'Blog', icon: FaNewspaper },
     { key: 'funding', label: 'Pendanaan', icon: FaDollarSign },

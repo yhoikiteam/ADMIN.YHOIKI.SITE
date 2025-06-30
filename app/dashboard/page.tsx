@@ -11,6 +11,7 @@ import BlogPage from './components/page/Blog';
 import FundingPage from './components/page/Pedanaan';
 import MitraPage from './components/page/Mitra';
 import PartnerListPage from './components/page/PartnerList';
+import SettingLandingPage from './components/page/pengaturan/LandingPage';
 
 export default function DashboardPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -57,6 +58,8 @@ export default function DashboardPage() {
                   return <MitraPage />
                 case "partner":
                   return <PartnerListPage />
+                case "landing":
+                  return <SettingLandingPage />
               }
             })()
           }
