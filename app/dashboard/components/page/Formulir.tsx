@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState, useEffect, useCallback, ChangeEvent, FormEvent } from 'react';
 import {
   Pencil,
@@ -22,16 +24,12 @@ import {
   Mail,
   Sparkles,
   LoaderCircle,
-  Link as LinkIcon, // Alias for Link to avoid conflict with React Link component
+  Copy, // Import Copy icon
+  QrCode, // Import QrCode icon
 } from 'lucide-react';
-import { supabase } from '@/lib/supabaseClient'; // Sesuaikan path ini dengan lokasi file Anda
+import { supabase } from '@/lib/supabaseClient';
+import QRCodeGenerator from '@/components/QrCodeGenerator'; // Import the new QR code component
 
-// Declare global variables provided by the Canvas environment for TypeScript
-// __app_id tidak digunakan langsung dalam path tabel Supabase berdasarkan skema yang diberikan,
-// tetapi mungkin relevan untuk identifikasi aplikasi dalam konteks yang lebih luas.
-declare const __app_id: string;
-
-// Define a type for form fields
 type FieldType = 'text' | 'paragraph' | 'number' | 'radio' | 'checkbox' | 'dropdown' | 'date' | 'time';
 
 interface FormField {
@@ -44,16 +42,15 @@ interface FormField {
 }
 
 interface FormData {
-  id?: string; // UUID dari Supabase
+  id?: string;
   name: string;
-  slug: string; // Untuk URL friendly names
-  fields: FormField[]; // Disimpan sebagai JSONB
-  user_id: string; // ID pengguna yang membuat formulir
-  created_at: string; // Timestamp ISO, Supabase default now()
+  slug: string;
+  fields: FormField[];
+  user_id: string;
+  created_at: string;
   recipient_email?: string;
 }
 
-// Helper to create a URL-friendly slug
 const createSlug = (name: string): string => {
   return name
     .toLowerCase()
@@ -63,9 +60,12 @@ const createSlug = (name: string): string => {
     .replace(/^-+|-+$/g, '');
 };
 
-const App: React.FC = () => {
+// Base URL for your forms (adjust this to your actual domain)
+const FORM_BASE_URL = 'https://yhoiki.site/formulir?slug='; // <-- PASTIKAN INI SESUAI DENGAN DOMAIN ASLI ANDA
+
+const FormulirPage: React.FC = () => {
   const [userId, setUserId] = useState<string | null>(null);
-  const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
+  const [isAppReady, setIsAppReady] = useState<boolean>(false);
 
   const [forms, setForms] = useState<FormData[]>([]);
   const [currentForm, setCurrentForm] = useState<FormData | null>(null);
@@ -73,17 +73,17 @@ const App: React.FC = () => {
   const [selectedFormSlug, setSelectedFormSlug] = useState<string | null>(null);
 
   const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
-  const [formToDeleteId, setFormToDeleteId] = useState<string | null>(null); // Changed to formToDeleteId
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [formToDeleteId, setFormToDeleteId] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [isGeneratingQuestions, setIsGeneratingQuestions] = useState<boolean>(false);
   const [isGeneratingOptions, setIsGeneratingOptions] = useState<string | null>(null);
 
-  const [loading, setLoading] = useState<boolean>(false)
+  const [loading, setLoading] = useState<boolean>(false);
+  const [showQRModal, setShowQRModal] = useState<{ url: string; name: string } | null>(null); // State for QR modal
 
-  // Handle pesan notifikasi
-  const showMessage = useCallback((type: 'success' | 'error', text: string) => {
+  const showMessage = useCallback((type: 'success' | 'error' | 'warning', text: string) => {
     setMessage({ type, text });
     const timer = setTimeout(() => {
       setMessage(null);
@@ -91,82 +91,60 @@ const App: React.FC = () => {
     return () => clearTimeout(timer);
   }, []);
 
-  // Inisialisasi Auth Supabase dan ambil ID pengguna
   useEffect(() => {
-    const getSession = async () => {
+    try {
       if (!supabase) {
-        console.error("Supabase client tidak terinisialisasi. Pastikan supabaseClient.ts berfungsi dengan benar.");
-        showMessage('error', 'Gagal menginisialisasi layanan Supabase.');
-        setIsAuthReady(true); // Set to true so UI can render error/login message
+        console.error("Supabase client is not initialized. Ensure supabaseClient.ts is configured correctly.");
+        showMessage('error', 'Failed to initialize Supabase service.');
+        setIsAppReady(true);
         return;
       }
 
-      const { data: { session }, error } = await supabase.auth.getSession();
-      if (session) {
-        setUserId(session.user.id);
-      } else {
-        // Untuk FormBuilder, disarankan pengguna harus login.
-        // Anda bisa mengarahkan pengguna ke halaman login di sini.
-        console.warn('Pengguna tidak terautentikasi. Fitur pembuatan formulir terbatas.');
-        showMessage('error', 'Anda harus login untuk membuat atau mengelola formulir.');
-        setUserId(null); // Pastikan userId null jika tidak ada sesi
+      let storedUserId = localStorage.getItem('form_builder_anon_user_id');
+      if (!storedUserId) {
+        storedUserId = crypto.randomUUID();
+        localStorage.setItem('form_builder_anon_user_id', storedUserId);
       }
-      setIsAuthReady(true);
-    };
-
-    getSession();
-
-    // Listen untuk perubahan auth state
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) {
-        setUserId(session.user.id);
-      } else {
-        setUserId(null);
-        setForms([]); // Bersihkan formulir jika pengguna logout
-        showMessage('error', 'Anda telah logout atau sesi Anda berakhir.');
-      }
-    });
-
-    return () => {
-      authListener?.subscription.unsubscribe();
-    };
+      setUserId(storedUserId);
+      setIsAppReady(true);
+    } catch (error: any) {
+      console.error("Error initializing app:", error);
+      showMessage('error', 'Failed to initialize application.');
+      setIsAppReady(true);
+    }
   }, [showMessage]);
 
-  // Ambil formulir pengguna dari Supabase dan setup real-time listener
   useEffect(() => {
     const fetchForms = async () => {
-      if (!supabase || !userId) return;
+      if (!supabase || !userId || mode !== 'dashboard') return;
 
-      setLoading(true); // Asumsi ada state loading di sini, meskipun tidak dideklarasikan di awal
+      setLoading(true);
       try {
         const { data, error } = await supabase
-          .from('forms') // Menggunakan tabel 'forms' sesuai skema Anda
+          .from('forms')
           .select('*')
           .eq('user_id', userId)
-          .order('created_at', { ascending: false }); // Urutkan berdasarkan waktu pembuatan
+          .order('created_at', { ascending: false });
 
         if (error) throw error;
         setForms(data as FormData[]);
       } catch (error: any) {
-        console.error("Error mengambil formulir:", error);
-        showMessage('error', `Gagal memuat formulir: ${error.message}`);
+        console.error("Error fetching forms:", error);
+        showMessage('error', `Failed to load forms: ${error.message}`);
       } finally {
-        setLoading(false); // Selesai loading
+        setLoading(false);
       }
     };
 
-    if (userId) { // Hanya fetch jika userId sudah tersedia
+    if (isAppReady && userId && mode === 'dashboard') {
       fetchForms();
 
-      // Setup real-time listener
       const channel = supabase
-        .channel(`forms_for_user_${userId}`) // Channel unik per user
+        .channel(`forms_for_user_${userId}`)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'forms', filter: `user_id=eq.${userId}` },
           (payload) => {
-            // Bisa fetch ulang semua forms, atau update state secara optimis
-            // Untuk kesederhanaan, kita akan fetch ulang
             console.log("Real-time change detected:", payload);
             fetchForms();
           }
@@ -174,33 +152,31 @@ const App: React.FC = () => {
         .subscribe();
 
       return () => {
-        supabase.removeChannel(channel); // Bersihkan listener saat komponen unmount
+        supabase.removeChannel(channel);
       };
     }
-  }, [userId, showMessage]); // Dependensi pada userId agar fetch ulang saat user berubah
+  }, [userId, showMessage, mode, isAppReady]);
 
-  // Handler untuk memulai pembuatan formulir baru
   const createNewForm = () => {
     if (!userId) {
-      showMessage('error', 'Anda harus login untuk membuat formulir baru.');
+      showMessage('error', 'Application not ready. Please refresh.');
       return;
     }
     setCurrentForm({
       name: 'Formulir Baru Tanpa Judul',
       slug: createSlug('Formulir Baru Tanpa Judul'),
       fields: [],
-      user_id: userId, // Gunakan user_id
-      created_at: new Date().toISOString(), // Gunakan ISO string untuk Supabase
+      user_id: userId,
+      created_at: new Date().toISOString(),
       recipient_email: '',
     });
     setMode('builder');
-    setSuggestedQuestions([]); // Clear suggestions when creating a new form
+    setSuggestedQuestions([]);
     setIsGeneratingQuestions(false);
     setIsGeneratingOptions(null);
     setSelectedFormSlug(null);
   };
 
-  // Handler untuk mengedit formulir yang sudah ada
   const editForm = async (formId: string) => {
     if (!supabase || !userId) return;
 
@@ -209,11 +185,11 @@ const App: React.FC = () => {
         .from('forms')
         .select('*')
         .eq('id', formId)
-        .eq('user_id', userId) // Pastikan hanya bisa mengedit formulir miliknya sendiri
+        .eq('user_id', userId)
         .single();
 
       if (error) {
-        if (error.code === 'PGRST116') { // No rows found
+        if (error.code === 'PGRST116') {
           showMessage('error', 'Formulir tidak ditemukan atau tidak memiliki akses.');
         } else {
           throw error;
@@ -233,7 +209,7 @@ const App: React.FC = () => {
 
   const saveForm = async () => {
     if (!supabase || !userId || !currentForm) {
-      showMessage('error', 'Tidak ada formulir untuk disimpan atau pengguna tidak diautentikasi.');
+      showMessage('error', 'Tidak ada formulir untuk disimpan atau aplikasi tidak siap.');
       return;
     }
 
@@ -243,29 +219,30 @@ const App: React.FC = () => {
         user_id: userId,
         created_at: currentForm.created_at || new Date().toISOString(),
         slug: createSlug(currentForm.name),
-        fields: currentForm.fields, // fields adalah JSONB, dikirim langsung sebagai array objek
-        recipient_email: currentForm.recipient_email || null // Pastikan null jika kosong
+        fields: currentForm.fields,
+        recipient_email: currentForm.recipient_email || null
       };
 
       if (currentForm.id) {
-        // Update existing form
         const { error } = await supabase
           .from('forms')
           .update(formToSave)
           .eq('id', currentForm.id)
-          .eq('user_id', userId); // Hanya izinkan update formulir milik user
+          .eq('user_id', userId);
         if (error) throw error;
       } else {
-        // Add new form
         const { data, error } = await supabase
           .from('forms')
           .insert(formToSave)
-          .select() // Pilih data yang disisipkan untuk mendapatkan ID
+          .select()
           .single();
         if (error) throw error;
-        setCurrentForm(data as FormData); // Update currentForm dengan ID baru
+        setCurrentForm(data as FormData);
       }
       showMessage('success', 'Formulir berhasil diperbarui!');
+      setMode('dashboard'); // <-- Kembali ke dashboard setelah simpan
+      setCurrentForm(null); // <-- Reset currentForm
+      setSelectedFormSlug(null); // <-- Reset selectedFormSlug
     } catch (error: any) {
       console.error("Error saving form to Supabase:", error);
       showMessage('error', `Gagal menyimpan formulir: ${error.message}`);
@@ -285,7 +262,7 @@ const App: React.FC = () => {
         .from('forms')
         .delete()
         .eq('id', formToDeleteId)
-        .eq('user_id', userId); // Hanya izinkan hapus formulir milik user
+        .eq('user_id', userId);
       if (error) throw error;
 
       showMessage('success', 'Formulir berhasil dihapus!');
@@ -316,7 +293,7 @@ const App: React.FC = () => {
 
   const updateRecipientEmail = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (currentForm) {
-      setCurrentForm({ ...currentForm, recipient_email: e.target.value }); // Gunakan recipient_email
+      setCurrentForm({ ...currentForm, recipient_email: e.target.value });
     }
   };
 
@@ -384,20 +361,18 @@ const App: React.FC = () => {
     });
 
     try {
-      // Simpan tanggapan di tabel 'responses' di Supabase
       const { error } = await supabase
-        .from('responses') // Menggunakan tabel 'responses' sesuai skema Anda
+        .from('responses')
         .insert({
           form_id: currentForm.id,
           form_name: currentForm.name,
-          response_data: responseData, // Disimpan sebagai JSONB
-          submitted_at: new Date().toISOString(), // Supabase default now()
-          user_id: userId || 'anonymous', // ID pengguna yang submit, atau 'anonymous'
+          response_data: responseData,
+          submitted_at: new Date().toISOString(),
+          user_id: userId || 'anonymous',
         });
 
       if (error) throw error;
       showMessage('success', 'Tanggapan formulir berhasil dikirim!');
-      // Opsional, reset field formulir di sini setelah pengiriman
       e.currentTarget.reset();
     } catch (error: any) {
       console.error("Error submitting form response to Supabase:", error);
@@ -405,54 +380,37 @@ const App: React.FC = () => {
     }
   };
 
-  // LLM Integration Functions (Tidak berubah karena menggunakan Gemini API)
+  // LLM Integration Functions (now calling API Routes)
   const generateSuggestedQuestions = async () => {
     if (!currentForm) return;
 
     setIsGeneratingQuestions(true);
     setSuggestedQuestions([]);
     try {
-      const prompt = `Berdasarkan judul formulir "${currentForm.name}" dan pertanyaan yang sudah ada: ${currentForm.fields.map(f => f.label).join(', ') || 'Tidak ada'}. Sarankan 3-5 pertanyaan ringkas dan beragam yang relevan untuk formulir ini. Berikan saran sebagai array JSON dari string.`;
-
-      let chatHistory = [];
-      chatHistory.push({ role: "user", parts: [{ text: prompt }] });
-      const payload = {
-        contents: chatHistory,
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "ARRAY",
-            items: { "type": "STRING" }
-          }
-        }
-      };
-      const apiKey = ""; // Canvas provides this
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
-      const response = await fetch(apiUrl, {
+      const response = await fetch('/api/ai/suggest-questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          formName: currentForm.name,
+          existingQuestions: currentForm.fields.map(f => f.label).join(', ') || 'Tidak ada pertanyaan'
+        })
       });
 
       const result = await response.json();
 
-      if (result.candidates && result.candidates.length > 0 &&
-          result.candidates[0].content && result.candidates[0].content.parts &&
-          result.candidates[0].content.parts.length > 0) {
-        const jsonString = result.candidates[0].content.parts[0].text;
-        const parsedSuggestions = JSON.parse(jsonString);
-        if (Array.isArray(parsedSuggestions)) {
-          setSuggestedQuestions(parsedSuggestions);
-        } else {
-          showMessage('error', 'Format saran pertanyaan tidak valid.');
-        }
+      if (!response.ok) {
+        showMessage('error', `Error from AI: ${result.error || 'Unknown error'}`);
+        return;
+      }
+
+      if (Array.isArray(result.suggestions)) {
+        setSuggestedQuestions(result.suggestions);
       } else {
-        showMessage('error', 'Gagal mendapatkan saran pertanyaan dari AI.');
+        showMessage('error', 'Format saran pertanyaan tidak valid dari AI.');
       }
     } catch (error: any) {
       console.error("Error generating questions:", error);
-      showMessage('error', 'Terjadi kesalahan saat membuat saran pertanyaan.');
+      showMessage('error', `Terjadi kesalahan saat membuat saran pertanyaan: ${error.message}`);
     } finally {
       setIsGeneratingQuestions(false);
     }
@@ -461,97 +419,91 @@ const App: React.FC = () => {
   const generateSuggestedOptions = async (fieldId: string, questionLabel: string) => {
     setIsGeneratingOptions(fieldId);
     try {
-      const prompt = `Berdasarkan pertanyaan "${questionLabel}", sarankan 3-5 opsi ringkas dan beragam untuk pertanyaan pilihan ganda/kotak centang/dropdown. Berikan saran sebagai array JSON dari string.`;
-
-      let chatHistory = [];
-      chatHistory.push({ role: "user", parts: [{ text: prompt }] });
-      const payload = {
-        contents: chatHistory,
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "ARRAY",
-            items: { "type": "STRING" }
-          }
-        }
-      };
-      const apiKey = ""; // Canvas provides this
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
-      const response = await fetch(apiUrl, {
+      const response = await fetch('/api/ai/suggest-options', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ questionLabel })
       });
 
       const result = await response.json();
 
-      if (result.candidates && result.candidates.length > 0 &&
-          result.candidates[0].content && result.candidates[0].content.parts &&
-          result.candidates[0].content.parts.length > 0) {
-        const jsonString = result.candidates[0].content.parts[0].text;
-        const parsedSuggestions = JSON.parse(jsonString);
-        if (Array.isArray(parsedSuggestions)) {
-          updateField(fieldId, { options: parsedSuggestions });
-        } else {
-          showMessage('error', 'Format saran opsi tidak valid.');
-        }
+      if (!response.ok) {
+        showMessage('error', `Error from AI: ${result.error || 'Unknown error'}`);
+        return;
+      }
+
+      if (Array.isArray(result.suggestions)) {
+        updateField(fieldId, { options: result.suggestions });
       } else {
-        showMessage('error', 'Gagal mendapatkan saran opsi dari AI.');
+        showMessage('error', 'Format saran opsi tidak valid dari AI.');
       }
     } catch (error: any) {
       console.error("Error generating options:", error);
-      showMessage('error', 'Terjadi kesalahan saat membuat saran opsi.');
+      showMessage('error', `Terjadi kesalahan saat membuat saran opsi: ${error.message}`);
     } finally {
       setIsGeneratingOptions(null);
     }
   };
 
+  const handleCopyFormLink = async (slug: string) => {
+    const formUrl = `${FORM_BASE_URL}${slug}`;
+    try {
+      await navigator.clipboard.writeText(formUrl);
+      showMessage('success', 'Link formulir berhasil disalin!');
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+      showMessage('error', 'Gagal menyalin link. Silakan coba lagi.');
+    }
+  };
 
-  // Simulate Next.js dynamic routing
+  const handleShowQR = (form: FormData) => {
+    setShowQRModal({ url: `${FORM_BASE_URL}${form.slug}`, name: form.name });
+  };
+
   const navigateToFormPreview = useCallback((form: FormData) => {
     setCurrentForm(form);
     setSelectedFormSlug(form.slug);
     setMode('preview');
-    // In a real Next.js app, this would be router.push(`/formulir/${form.slug}`);
     console.log(`Simulasi navigasi ke /formulir/${form.slug}`);
   }, []);
 
-  // Effect to load form when selectedFormSlug changes (simulates direct access via URL)
-  // This would typically fetch the form data from Supabase directly using the slug
-  // but here it re-uses the 'forms' state for simplicity in Canvas.
   useEffect(() => {
-    if (mode === 'preview' && selectedFormSlug && forms.length > 0) {
-      const formToLoad = forms.find(f => f.slug === selectedFormSlug);
-      if (formToLoad) {
-        setCurrentForm(formToLoad);
-      } else {
-        showMessage('error', 'Formulir tidak ditemukan.');
-        setMode('dashboard');
-        setSelectedFormSlug(null);
-      }
+    if (mode === 'preview' && selectedFormSlug) {
+      const fetchFormForPreview = async () => {
+        if (!supabase) return;
+
+        try {
+          const { data, error } = await supabase
+            .from('forms')
+            .select('*')
+            .eq('slug', selectedFormSlug)
+            .single();
+
+          if (error) {
+            if (error.code === 'PGRST116') {
+              showMessage('error', 'Formulir pratinjau tidak ditemukan.');
+            } else {
+              throw error;
+            }
+          } else if (data) {
+            setCurrentForm(data as FormData);
+          } else {
+            showMessage('error', 'Formulir pratinjau tidak ditemukan.');
+          }
+        } catch (error: any) {
+          console.error("Error fetching form for preview:", error);
+          showMessage('error', `Gagal memuat formulir pratinjau: ${error.message}`);
+        }
+      };
+
+      fetchFormForPreview();
     }
-  }, [selectedFormSlug, mode, forms]);
+  }, [selectedFormSlug, mode, showMessage]);
 
-
-  if (!isAuthReady) {
+  if (!isAppReady) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-100 text-gray-700">
-        Memuat aplikasi dan mengautentikasi...
-      </div>
-    );
-  }
-
-  // Jika userId null setelah isAuthReady, berarti pengguna belum login
-  if (!userId && isAuthReady) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-100 p-4">
-        <div className="bg-white rounded-2xl p-8 shadow-xl max-w-md w-full text-center space-y-4">
-          <AlertCircle size={48} className="text-orange-500 mx-auto" />
-          <h3 className="text-xl font-bold text-gray-800">Autentikasi Diperlukan</h3>
-          <p className="text-gray-600">Anda harus login untuk mengakses Pembuat Formulir ini. Silakan refresh halaman jika Anda sudah login atau coba lagi nanti.</p>
-          {/* Di aplikasi nyata, Anda akan memiliki tombol login di sini */}
-        </div>
+        Memuat aplikasi...
       </div>
     );
   }
@@ -561,7 +513,7 @@ const App: React.FC = () => {
       {/* Global Message Display */}
       {message && (
         <div className={`fixed top-4 left-1/2 -translate-x-1/2 p-3 px-6 rounded-lg shadow-md z-50 ${
-          message.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+          message.type === 'success' ? 'bg-green-500 text-white' : message.type === 'warning' ? 'bg-yellow-500 text-gray-900' : 'bg-red-500 text-white'
         } flex items-center space-x-2`}>
           {message.type === 'error' && <AlertCircle size={20} />}
           <span>{message.text}</span>
@@ -578,7 +530,7 @@ const App: React.FC = () => {
         </h1>
         {userId && (
             <div className="text-sm text-gray-600 hidden sm:block">
-                ID Pengguna Anda: <span className="font-mono bg-gray-100 px-2 py-1 rounded-md text-xs sm:text-sm">{userId}</span>
+                ID Sesi Anda: <span className="font-mono bg-gray-100 px-2 py-1 rounded-md text-xs sm:text-sm">{userId}</span>
             </div>
         )}
         <div className="flex space-x-2">
@@ -595,7 +547,9 @@ const App: React.FC = () => {
             )}
             {mode === 'preview' && (
                 <button
-                    onClick={() => setMode('builder')}
+                    onClick={() => {
+                        setMode('dashboard');
+                    }}
                     className="bg-yellow-100 hover:bg-yellow-200 text-yellow-700 font-semibold py-2 px-4 rounded-lg shadow-sm transition-all duration-200 flex items-center space-x-2"
                     title="Kembali ke Pembangun"
                 >
@@ -617,7 +571,6 @@ const App: React.FC = () => {
       {/* Main Content Area */}
       <main className="w-full max-w-4xl bg-white p-6 rounded-2xl shadow-xl relative">
         {mode === 'dashboard' && (
-          /* Dashboard View */
           <div className="space-y-6">
             <h2 className="text-2xl font-bold text-gray-700 mb-4">Dashboard Formulir Anda</h2>
             <button
@@ -627,7 +580,11 @@ const App: React.FC = () => {
               <Plus size={20} /> Buat Formulir Baru
             </button>
 
-            {forms.length === 0 ? (
+            {loading ? (
+                <p className="text-gray-500 text-center py-12 flex items-center justify-center space-x-2">
+                    <LoaderCircle className="animate-spin" size={20} /> <span>Memuat formulir...</span>
+                </p>
+            ) : forms.length === 0 ? (
               <p className="text-gray-500 text-center py-12">Anda belum membuat formulir apa pun. Mulai sekarang!</p>
             ) : (
               <ul className="space-y-4">
@@ -639,7 +596,7 @@ const App: React.FC = () => {
                         Dibuat: {new Date(form.created_at).toLocaleDateString()} {new Date(form.created_at).toLocaleTimeString()}
                       </p>
                        <p className="text-sm text-gray-500 mt-1">
-                        Slug: <span className="font-mono bg-gray-100 px-1 rounded-sm text-xs">{form.slug}</span>
+                        URL: <span className="font-mono bg-gray-100 px-1 rounded-sm text-xs">{FORM_BASE_URL}{form.slug}</span>
                       </p>
                       {form.id && (
                           <p className="text-sm text-gray-500 mt-1">
@@ -661,6 +618,20 @@ const App: React.FC = () => {
                         <Eye size={18} /> <span>Lihat</span>
                       </button>
                       <button
+                        onClick={() => handleCopyFormLink(form.slug)}
+                        className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg shadow-sm transition-colors duration-200 flex items-center space-x-1"
+                        title="Salin Link Formulir"
+                      >
+                        <Copy size={18} /> <span>Salin</span>
+                      </button>
+                      <button
+                        onClick={() => handleShowQR(form)}
+                        className="bg-yellow-100 hover:bg-yellow-200 text-yellow-700 font-semibold py-2 px-4 rounded-lg shadow-sm transition-colors duration-200 flex items-center space-x-1"
+                        title="Unduh QR Code"
+                      >
+                        <QrCode size={18} /> <span>QR</span>
+                      </button>
+                      <button
                         onClick={() => requestDeleteForm(form.id!)}
                         className="bg-red-100 hover:bg-red-200 text-red-700 font-semibold py-2 px-4 rounded-lg shadow-sm transition-colors duration-200 flex items-center space-x-1"
                       >
@@ -675,9 +646,7 @@ const App: React.FC = () => {
         )}
 
         {mode === 'builder' && currentForm && (
-          /* Form Builder View */
           <div className="flex flex-col lg:flex-row lg:space-x-6">
-            {/* Main Form Building Area */}
             <div className="flex-grow space-y-6">
               <div className="mb-6 pb-4 border-b border-gray-200">
                 <input
@@ -689,11 +658,11 @@ const App: React.FC = () => {
                   className="w-full text-3xl font-bold text-gray-700 p-2 border-b-2 border-transparent focus:outline-none focus:border-green-500 transition-all duration-200"
                 />
                 <p className="text-sm text-gray-500 mt-1">
-                  URL Slug: <span className="font-mono bg-gray-100 px-1 rounded-sm text-xs">/formulir/{currentForm.slug}</span>
+                  URL Slug: <span className="font-mono bg-gray-100 px-1 rounded-sm text-xs">/formulir?{currentForm.slug}</span>
                 </p>
                 <input
                     type="email"
-                    value={currentForm.recipient_email || ''} // Gunakan recipient_email
+                    value={currentForm.recipient_email || ''}
                     onChange={updateRecipientEmail}
                     placeholder="Email penerima tanggapan (opsional)"
                     className="w-full text-sm text-gray-600 p-2 mt-2 border-b border-transparent focus:outline-none focus:border-green-300 transition-all duration-200"
@@ -799,7 +768,6 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Right Sidebar for adding fields */}
             <div className="lg:w-64 lg:flex-shrink-0 mt-8 lg:mt-0 p-4 bg-white rounded-xl shadow-lg border border-gray-100">
               <h3 className="text-lg font-semibold text-gray-700 mb-4">Tambahkan Bidang</h3>
               <button
@@ -918,9 +886,9 @@ const App: React.FC = () => {
             <div className="max-w-2xl mx-auto p-8 bg-white rounded-2xl shadow-xl">
                 <h2 className="text-3xl font-bold text-gray-800 mb-2">{currentForm.name}</h2>
                 <p className="text-sm text-gray-600 mb-2">
-                    URL Formulir Anda: <span className="font-mono bg-gray-100 px-1 rounded-sm text-xs">/formulir/{currentForm.slug}</span>
+                    URL Formulir: <span className="font-mono bg-gray-100 px-1 rounded-sm text-xs">{FORM_BASE_URL}{currentForm.slug}</span>
                 </p>
-                {currentForm.recipient_email && ( // Gunakan recipient_email
+                {currentForm.recipient_email && (
                   <p className="text-sm text-gray-600 mb-4 flex items-center">
                     <Mail size={16} className="mr-2"/> Tanggapan akan dikirimkan ke: <span className="font-semibold ml-1">{currentForm.recipient_email}</span>
                   </p>
@@ -946,7 +914,6 @@ const App: React.FC = () => {
                                     name={field.id}
                                     rows={4}
                                     className="w-full p-2 border border-gray-200 rounded-md focus:ring-green-400 focus:border-green-400 resize-y transition-all duration-200"
-                                    required={field.required}
                                 ></textarea>
                             )}
                             {field.type === 'number' && (
@@ -1034,7 +1001,7 @@ const App: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       {showDeleteModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/50 bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl p-6 shadow-xl max-w-sm w-full text-center space-y-4">
             <AlertCircle size={48} className="text-red-500 mx-auto" />
             <h3 className="text-xl font-bold text-gray-800">Konfirmasi Hapus</h3>
@@ -1056,8 +1023,17 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* QR Code Modal */}
+      {showQRModal && (
+        <QRCodeGenerator
+          url={showQRModal.url}
+          formName={showQRModal.name}
+          onClose={() => setShowQRModal(null)}
+        />
+      )}
     </div>
   );
 };
 
-export default App;
+export default FormulirPage;

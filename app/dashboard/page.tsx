@@ -6,12 +6,13 @@ import { FaBars } from 'react-icons/fa';
 import Dashboard from './components/page/Dashboard';
 import ManageAccountsPage from './components/page/Akun';
 import YhoikiMemberPage from './components/page/Member';
-import CommunityEventsPage from './components/page/Community';
+import CommunityEventsPage from './components/page/Community/Events';
 import BlogPage from './components/page/Blog';
 import FundingPage from './components/page/Pedanaan';
 import MitraPage from './components/page/Mitra';
 import PartnerListPage from './components/page/PartnerList';
 import SettingLandingPage from './components/page/pengaturan/LandingPage';
+import FormulirPage from './components/page/Formulir';
 
 export default function DashboardPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -60,6 +61,8 @@ export default function DashboardPage() {
                   return <PartnerListPage />
                 case "landing":
                   return <SettingLandingPage />
+                case "formulir":
+                  return <FormulirPage />
               }
             })()
           }
